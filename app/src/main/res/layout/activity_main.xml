@@ -16,11 +16,17 @@
             android:gravity="center"
             android:text="@string/no_camera_access" />
 
+        <WebView
+            android:id="@+id/webview"
+            android:layout_height="fill_parent"
+            android:layout_width="fill_parent" />
+        
         <SurfaceView
             android:id="@+id/preview"
             android:layout_gravity="bottom|right"
-            android:layout_width="300dp"
-            android:layout_height="300dp"
+            android:layout_width="350dp"
+            android:layout_height="250dp"
+            android:layout_marginRight="10dp"
             android:visibility="visible"/>
 
     </FrameLayout>

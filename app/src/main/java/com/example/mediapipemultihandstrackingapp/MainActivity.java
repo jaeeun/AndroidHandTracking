@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.opengl.Matrix;
 import android.os.Bundle;
@@ -15,6 +16,9 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -26,11 +30,13 @@ import com.google.mediapipe.components.FrameProcessor;
 import com.google.mediapipe.components.PermissionHelper;
 import com.google.mediapipe.formats.proto.LandmarkProto.NormalizedLandmark;
 import com.google.mediapipe.formats.proto.LandmarkProto.NormalizedLandmarkList;
+import com.google.mediapipe.formats.proto.DetectionProto.Detection;
 import com.google.mediapipe.framework.AndroidAssetUtil;
 import com.google.mediapipe.framework.AndroidPacketCreator;
 import com.google.mediapipe.framework.Packet;
 import com.google.mediapipe.framework.PacketGetter;
 import com.google.mediapipe.glutil.EglManager;
+import com.google.protobuf.StringValue;
 
 import org.eclipse.paho.client.mqttv3.DisconnectedBufferOptions;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
@@ -49,7 +55,9 @@ import java.util.Map;
  * Main activity of MediaPipe example apps.
  */
 public class MainActivity extends AppCompatActivity {
-    private static final String TAG = "MainActivity";
+    private static final String TAG = "yang";
+    private static final String TAG_Mediapipe = "Mediapipe";
+    private static final String TAG_Mqtt = "MQTT";
     private static final String BINARY_GRAPH_NAME = "hand_tracking_mobile_gpu.binarypb";
     private static final String INPUT_VIDEO_STREAM_NAME = "input_video";
     private static final String OUTPUT_VIDEO_STREAM_NAME = "output_video";
@@ -69,6 +77,7 @@ public class MainActivity extends AppCompatActivity {
         System.loadLibrary("opencv_java3");
     }
 
+    private WebView webView;
     // {@link SurfaceTexture} where the camera-preview frames can be accessed.
     private SurfaceTexture previewFrameTexture;
     // {@link SurfaceView} that displays the camera-preview frames processed by a MediaPipe graph
@@ -86,41 +95,41 @@ public class MainActivity extends AppCompatActivity {
     // Handles camera access via the {@link CameraX} Jetpack support library.
     private CameraXPreviewHelper cameraHelper;
 
-    private String ServerIP = "tcp://192.168.23.77:1883";
-    private String Topic = "and_hand";
+    private MqttAsyncClient mqttClient;
+    private String ServerIP = "tcp://13.124.29.179:1883"; //AWS EC2
+//    private String ServerIP = "tcp://192.168.209.169:1883";
+    private String Topic = "/android";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(getContentViewLayoutResId());
 
+        webView = findViewById(R.id.webview);
+        initWebView();
+
         try {
-            MqttAsyncClient mqttClient = new MqttAsyncClient(ServerIP, MqttAsyncClient.generateClientId(),new MemoryPersistence());
+            Log.i(TAG_Mqtt,"Try connect with MQTT broker");
+            mqttClient = new MqttAsyncClient(ServerIP, MqttAsyncClient.generateClientId(),new MemoryPersistence());
             mqttClient.setCallback(new MqttCallbackExtended() {
                 @Override
                 public void connectComplete(boolean reconnect, String serverURI) {
-                    Log.i("yang","MqttAsyncClient connectComplete");
-
-                    try {
-                        mqttClient.publish(Topic,new MqttMessage(new String("aaaaa").getBytes()));
-                    } catch (MqttException e) {
-                        e.printStackTrace();
-                    }
+                    Log.i(TAG_Mqtt,"MqttAsyncClient connectComplete");
                 }
 
                 @Override
                 public void connectionLost(Throwable cause) {
-                    Log.i("yang","MqttAsyncClient connectionLost");
+                    Log.i(TAG_Mqtt,"MqttAsyncClient connectionLost");
                 }
 
                 @Override
                 public void messageArrived(String topic, MqttMessage message) throws Exception {
-                    Log.i("yang","MqttAsyncClient messageArrived");
+                    Log.i(TAG_Mqtt,"MqttAsyncClient messageArrived");
                 }
 
                 @Override
                 public void deliveryComplete(IMqttDeliveryToken token) {
-                    Log.i("yang","MqttAsyncClient deliveryComplete");
+                    Log.i(TAG_Mqtt,"MqttAsyncClient deliveryComplete");
                 }
             });
 
@@ -170,19 +179,46 @@ public class MainActivity extends AppCompatActivity {
         // To show verbose logging, run:
         // adb shell setprop log.tag.MainActivity VERBOSE
 //        if (Log.isLoggable(TAG, Log.VERBOSE)) {
-            processor.addPacketCallback(
-                    OUTPUT_LANDMARKS_STREAM_NAME,
-                    (packet) -> {
-//                        Log.v("yang", "Received multi-hand landmarks packet.");
-                        List<NormalizedLandmarkList> multiHandLandmarks =
-                                PacketGetter.getProtoVector(packet, NormalizedLandmarkList.parser());
-                        Log.v(
-                                "yang",
-                                "[TS:"
-                                        + packet.getTimestamp()
-                                        + "] "
-                                        + getMultiHandLandmarksDebugString(multiHandLandmarks));
-                    });
+        processor.addPacketCallback(
+                OUTPUT_LANDMARKS_STREAM_NAME,
+                (packet) -> {
+//                        Log.v(TAG_Mediapipe, "Received multi-hand landmarks packet.");
+                    List<NormalizedLandmarkList> multiHandLandmarks =
+                            PacketGetter.getProtoVector(packet, NormalizedLandmarkList.parser());
+//                    Log.v(
+//                            TAG_Mediapipe,
+//                            "[TS:"
+//                                    + packet.getTimestamp()
+//                                    + "] "
+//                                    + getMultiHandLandmarksDebugString(multiHandLandmarks));
+
+
+                    sendMQTTMultiHandLandmarks(multiHandLandmarks);
+                });
+//        processor.addPacketCallback(
+//                "handedness",
+//                (packet) -> {
+//                    List<Detection> cc  = PacketGetter.getProtoVector(packet, Detection.parser());
+//
+//                    String handedness = cc.get(0).getLabel(0);
+//
+//                    if(handedness.contains("Right")) handedness = "Right";
+//                    else if(handedness.contains("Left")) handedness = "Left";
+//
+//
+//                    tracking_handedness= handedness;
+//                    long now = System.currentTimeMillis();
+//
+//                    if(now-tracking_time<5){
+//                        Log.i("yang","send : handedness -----");
+//                    }else{
+//                        tracking_time = now;
+//                        Log.i("yang","make h ");
+//                    }
+//
+//
+//                });
+
 //        }
     }
 
@@ -190,6 +226,32 @@ public class MainActivity extends AppCompatActivity {
     // have a custom layout, override this method and return the custom layout.
     protected int getContentViewLayoutResId() {
         return R.layout.activity_main;
+    }
+
+    public void initWebView(){
+        webView.setWebViewClient(new WebViewClient(){
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+            }
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+            }
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+        });
+
+        WebSettings ws = webView.getSettings();
+        ws.setJavaScriptEnabled(true);
+//        webView.clearCache(true);
+//        webView.getSettings().setJavaScriptEnabled(true);
+        webView.loadUrl("http://13.124.29.179");
+//        webView.loadUrl("https://m.naver.com/");
+
     }
 
     @Override
@@ -259,6 +321,12 @@ public class MainActivity extends AppCompatActivity {
         Size displaySize = cameraHelper.computeDisplaySizeFromViewSize(viewSize);
         boolean isCameraRotated = cameraHelper.isCameraRotated();
 
+        try {
+            mqttClient.publish(Topic+"_info",new MqttMessage(new String(String.valueOf(width)+","+String.valueOf(height)).getBytes()));
+            Log.i(TAG_Mqtt,"mqtt publish");
+        } catch (MqttException e) {
+            e.printStackTrace();
+        }
 
         // Connect the converter to the camera-preview frames as its input (via
         // previewFrameTexture), and configure the output width and height as the computed
@@ -293,9 +361,26 @@ public class MainActivity extends AppCompatActivity {
                             }
                         });
     }
+    private String getMultiHandLandmarksMQTTMessage(List<NormalizedLandmarkList> multiHandLandmarks){
+        String multiHandLandmarksStr="";
+
+        for (NormalizedLandmarkList landmarks : multiHandLandmarks) {
+            for (NormalizedLandmark landmark : landmarks.getLandmarkList()) {
+                multiHandLandmarksStr +=
+                                landmark.getX()
+                                + ", "
+                                + landmark.getY()
+                                + ", "
+                                + landmark.getZ()
+                                + ",";
+            }
+        }
+
+        return multiHandLandmarksStr;
+    }
 
     private String getMultiHandLandmarksDebugString(List<NormalizedLandmarkList> multiHandLandmarks) {
-        Log.i("yang","getMultiHandLandmarksDebugString");
+        Log.i(TAG_Mediapipe,"getMultiHandLandmarksDebugString");
         if (multiHandLandmarks.isEmpty()) {
             return "No hand landmarks";
         }
@@ -323,5 +408,32 @@ public class MainActivity extends AppCompatActivity {
         return multiHandLandmarksStr;
     }
 
+    private void sendMQTTMultiHandLandmarks(List<NormalizedLandmarkList> multiHandLandmarks) {
+        Log.i(TAG_Mediapipe,"getMultiHandLandmarksDebugString");
+
+        for (NormalizedLandmarkList landmarks : multiHandLandmarks) {
+            String multiHandLandmarksStr = "";
+            for (NormalizedLandmark landmark : landmarks.getLandmarkList()) {
+                multiHandLandmarksStr +=
+                                + landmark.getX()
+                                + ", "
+                                + landmark.getY()
+                                + ", "
+                                + landmark.getZ()
+                                + ", ";
+            }
+
+            multiHandLandmarksStr = multiHandLandmarksStr.substring(0, multiHandLandmarksStr.length()-2);
+            Log.i(TAG_Mqtt,"mqtt publish -  "+multiHandLandmarksStr);
+
+            //MQTT 메세지 보내기
+            try {
+                mqttClient.publish(Topic+"_hand",new MqttMessage(multiHandLandmarksStr.getBytes()));
+            } catch (MqttException e) {
+                e.printStackTrace();
+            }
+
+        }
+    }
 
 }
